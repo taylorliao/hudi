@@ -19,9 +19,11 @@
 package org.apache.hudi.table;
 
 import org.apache.hudi.configuration.FlinkOptions;
+import org.apache.hudi.hive.MultiPartKeysValueExtractor;
 import org.apache.hudi.keygen.ComplexAvroKeyGenerator;
 import org.apache.hudi.keygen.NonpartitionedAvroKeyGenerator;
 import org.apache.hudi.util.AvroSchemaConverter;
+import org.apache.hudi.util.StreamerUtil;
 
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
@@ -61,7 +63,7 @@ public class HoodieTableFactory implements DynamicTableSourceFactory, DynamicTab
 
     Configuration conf = (Configuration) helper.getOptions();
     TableSchema schema = TableSchemaUtils.getPhysicalSchema(context.getCatalogTable().getSchema());
-    validateRequiredFields(conf, schema);
+    sanityCheck(conf, schema);
     setupConfOptions(conf, context.getObjectIdentifier().getObjectName(), context.getCatalogTable(), schema);
 
     Path path = new Path(conf.getOptional(FlinkOptions.PATH).orElseThrow(() ->
@@ -78,7 +80,7 @@ public class HoodieTableFactory implements DynamicTableSourceFactory, DynamicTab
   public DynamicTableSink createDynamicTableSink(Context context) {
     Configuration conf = FlinkOptions.fromMap(context.getCatalogTable().getOptions());
     TableSchema schema = TableSchemaUtils.getPhysicalSchema(context.getCatalogTable().getSchema());
-    validateRequiredFields(conf, schema);
+    sanityCheck(conf, schema);
     setupConfOptions(conf, context.getObjectIdentifier().getObjectName(), context.getCatalogTable(), schema);
     return new HoodieTableSink(conf, schema);
   }
@@ -102,12 +104,13 @@ public class HoodieTableFactory implements DynamicTableSourceFactory, DynamicTab
   //  Utilities
   // -------------------------------------------------------------------------
 
-  /** Validate required options. For e.g, record key and pre_combine key.
+  /**
+   * The sanity check.
    *
    * @param conf The table options
    * @param schema The table schema
    */
-  private void validateRequiredFields(Configuration conf, TableSchema schema) {
+  private void sanityCheck(Configuration conf, TableSchema schema) {
     List<String> fields = Arrays.stream(schema.getFieldNames()).collect(Collectors.toList());
 
     // validate record key in pk absence.
@@ -146,8 +149,10 @@ public class HoodieTableFactory implements DynamicTableSourceFactory, DynamicTab
     conf.setString(FlinkOptions.TABLE_NAME.key(), tableName);
     // hoodie key about options
     setupHoodieKeyOptions(conf, table);
-    // cleaning options
-    setupCleaningOptions(conf);
+    // compaction options
+    setupCompactionOptions(conf);
+    // hive options
+    setupHiveOptions(conf);
     // infer avro schema from physical DDL schema
     inferAvroSchema(conf, schema.toRowDataType().notNull().getLogicalType());
   }
@@ -186,9 +191,9 @@ public class HoodieTableFactory implements DynamicTableSourceFactory, DynamicTab
   }
 
   /**
-   * Sets up the cleaning options from the table definition.
+   * Sets up the compaction options from the table definition.
    */
-  private static void setupCleaningOptions(Configuration conf) {
+  private static void setupCompactionOptions(Configuration conf) {
     int commitsToRetain = conf.getInteger(FlinkOptions.CLEAN_RETAIN_COMMITS);
     int minCommitsToKeep = conf.getInteger(FlinkOptions.ARCHIVE_MIN_COMMITS);
     if (commitsToRetain >= minCommitsToKeep) {
@@ -199,21 +204,42 @@ public class HoodieTableFactory implements DynamicTableSourceFactory, DynamicTab
       conf.setInteger(FlinkOptions.ARCHIVE_MIN_COMMITS, commitsToRetain + 10);
       conf.setInteger(FlinkOptions.ARCHIVE_MAX_COMMITS, commitsToRetain + 20);
     }
+    if (conf.getBoolean(FlinkOptions.COMPACTION_SCHEDULE_ENABLED)
+        && !conf.getBoolean(FlinkOptions.COMPACTION_ASYNC_ENABLED)
+        && FlinkOptions.isDefaultValueDefined(conf, FlinkOptions.COMPACTION_TARGET_IO)) {
+      // if compaction schedule is on, tweak the target io to 500GB
+      conf.setLong(FlinkOptions.COMPACTION_TARGET_IO, 500 * 1024L);
+    }
+    if (StreamerUtil.allowDuplicateInserts(conf)) {
+      // no need for compaction if insert duplicates is allowed
+      conf.setBoolean(FlinkOptions.COMPACTION_ASYNC_ENABLED, false);
+      conf.setBoolean(FlinkOptions.COMPACTION_SCHEDULE_ENABLED, false);
+    }
+  }
+
+  /**
+   * Sets up the hive options from the table definition.
+   * */
+  private static void setupHiveOptions(Configuration conf) {
+    if (!conf.getBoolean(FlinkOptions.HIVE_STYLE_PARTITIONING)
+        && FlinkOptions.isDefaultValueDefined(conf, FlinkOptions.HIVE_SYNC_PARTITION_EXTRACTOR_CLASS)) {
+      conf.setString(FlinkOptions.HIVE_SYNC_PARTITION_EXTRACTOR_CLASS, MultiPartKeysValueExtractor.class.getName());
+    }
   }
 
   /**
    * Inferences the deserialization Avro schema from the table schema (e.g. the DDL)
-   * if both options {@link FlinkOptions#READ_AVRO_SCHEMA_PATH} and
-   * {@link FlinkOptions#READ_AVRO_SCHEMA} are not specified.
+   * if both options {@link FlinkOptions#SOURCE_AVRO_SCHEMA_PATH} and
+   * {@link FlinkOptions#SOURCE_AVRO_SCHEMA} are not specified.
    *
    * @param conf    The configuration
    * @param rowType The specified table row type
    */
   private static void inferAvroSchema(Configuration conf, LogicalType rowType) {
-    if (!conf.getOptional(FlinkOptions.READ_AVRO_SCHEMA_PATH).isPresent()
-        && !conf.getOptional(FlinkOptions.READ_AVRO_SCHEMA).isPresent()) {
+    if (!conf.getOptional(FlinkOptions.SOURCE_AVRO_SCHEMA_PATH).isPresent()
+        && !conf.getOptional(FlinkOptions.SOURCE_AVRO_SCHEMA).isPresent()) {
       String inferredSchema = AvroSchemaConverter.convertToSchema(rowType).toString();
-      conf.setString(FlinkOptions.READ_AVRO_SCHEMA, inferredSchema);
+      conf.setString(FlinkOptions.SOURCE_AVRO_SCHEMA, inferredSchema);
     }
   }
 }

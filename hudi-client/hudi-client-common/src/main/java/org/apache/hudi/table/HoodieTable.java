@@ -111,9 +111,9 @@ public abstract class HoodieTable<T extends HoodieRecordPayload, I, K, O> implem
     HoodieMetadataConfig metadataConfig = HoodieMetadataConfig.newBuilder().fromProperties(config.getMetadataConfig().getProps())
         .build();
     this.metadata = HoodieTableMetadata.create(context, metadataConfig, config.getBasePath(),
-        FileSystemViewStorageConfig.DEFAULT_VIEW_SPILLABLE_DIR);
+        FileSystemViewStorageConfig.FILESYSTEM_VIEW_SPILLABLE_DIR.defaultValue());
 
-    this.viewManager = FileSystemViewManager.createViewManager(context, config.getMetadataConfig(), config.getViewStorageConfig(), () -> metadata);
+    this.viewManager = FileSystemViewManager.createViewManager(context, config.getMetadataConfig(), config.getViewStorageConfig(), config.getCommonConfig(), () -> metadata);
     this.metaClient = metaClient;
     this.index = getIndex(config, context);
     this.taskContextSupplier = context.getTaskContextSupplier();
@@ -123,7 +123,7 @@ public abstract class HoodieTable<T extends HoodieRecordPayload, I, K, O> implem
 
   private synchronized FileSystemViewManager getViewManager() {
     if (null == viewManager) {
-      viewManager = FileSystemViewManager.createViewManager(getContext(), config.getMetadataConfig(), config.getViewStorageConfig(), () -> metadata);
+      viewManager = FileSystemViewManager.createViewManager(getContext(), config.getMetadataConfig(), config.getViewStorageConfig(), config.getCommonConfig(), () -> metadata);
     }
     return viewManager;
   }
@@ -656,6 +656,7 @@ public abstract class HoodieTable<T extends HoodieRecordPayload, I, K, O> implem
   public HoodieLogBlockType getLogDataBlockFormat() {
     switch (getBaseFileFormat()) {
       case PARQUET:
+      case ORC:
         return HoodieLogBlockType.AVRO_DATA_BLOCK;
       case HFILE:
         return HoodieLogBlockType.HFILE_DATA_BLOCK;

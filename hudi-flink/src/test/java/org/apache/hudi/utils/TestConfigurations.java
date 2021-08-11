@@ -69,10 +69,8 @@ public class TestConfigurations {
         + "with (\n"
         + "  'connector' = 'hudi'";
     StringBuilder builder = new StringBuilder(createTable);
-    if (options.size() != 0) {
-      options.forEach((k, v) -> builder.append(",\n")
-          .append("  '").append(k).append("' = '").append(v).append("'"));
-    }
+    options.forEach((k, v) -> builder.append(",\n")
+        .append("  '").append(k).append("' = '").append(v).append("'"));
     builder.append("\n)");
     return builder.toString();
   }
@@ -139,12 +137,28 @@ public class TestConfigurations {
     return builder.toString();
   }
 
+  public static String getCsvSourceDDL(String tableName, String fileName) {
+    String sourcePath = Objects.requireNonNull(Thread.currentThread()
+        .getContextClassLoader().getResource(fileName)).toString();
+    return "create table " + tableName + "(\n"
+        + "  uuid varchar(20),\n"
+        + "  name varchar(10),\n"
+        + "  age int,\n"
+        + "  ts timestamp(3),\n"
+        + "  `partition` varchar(20)\n"
+        + ") with (\n"
+        + "  'connector' = 'filesystem',\n"
+        + "  'path' = '" + sourcePath + "',\n"
+        + "  'format' = 'csv'\n"
+        + ")";
+  }
+
   public static final RowDataSerializer SERIALIZER = new RowDataSerializer(ROW_TYPE);
 
   public static Configuration getDefaultConf(String tablePath) {
     Configuration conf = new Configuration();
     conf.setString(FlinkOptions.PATH, tablePath);
-    conf.setString(FlinkOptions.READ_AVRO_SCHEMA_PATH,
+    conf.setString(FlinkOptions.SOURCE_AVRO_SCHEMA_PATH,
         Objects.requireNonNull(Thread.currentThread()
             .getContextClassLoader().getResource("test_read_schema.avsc")).toString());
     conf.setString(FlinkOptions.TABLE_NAME, "TestHoodieTable");
@@ -155,7 +169,7 @@ public class TestConfigurations {
   public static FlinkStreamerConfig getDefaultStreamerConf(String tablePath) {
     FlinkStreamerConfig streamerConf = new FlinkStreamerConfig();
     streamerConf.targetBasePath = tablePath;
-    streamerConf.readSchemaFilePath = Objects.requireNonNull(Thread.currentThread()
+    streamerConf.sourceAvroSchemaPath = Objects.requireNonNull(Thread.currentThread()
         .getContextClassLoader().getResource("test_read_schema.avsc")).toString();
     streamerConf.targetTableName = "TestHoodieTable";
     streamerConf.partitionPathField = "partition";

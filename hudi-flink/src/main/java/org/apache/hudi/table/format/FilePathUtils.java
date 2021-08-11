@@ -144,6 +144,9 @@ public class FilePathUtils {
       boolean hivePartition,
       String[] partitionKeys) {
     LinkedHashMap<String, String> fullPartSpec = new LinkedHashMap<>();
+    if (partitionKeys.length == 0) {
+      return fullPartSpec;
+    }
     List<String[]> kvs = new ArrayList<>();
     int curDepth = 0;
     do {
@@ -344,7 +347,7 @@ public class FilePathUtils {
       return new Path[] {path};
     } else {
       final String defaultParName = conf.getString(FlinkOptions.PARTITION_DEFAULT_NAME);
-      final boolean hivePartition = conf.getBoolean(FlinkOptions.HIVE_STYLE_PARTITION);
+      final boolean hivePartition = conf.getBoolean(FlinkOptions.HIVE_STYLE_PARTITIONING);
       List<Map<String, String>> partitionPaths =
           getPartitions(path, hadoopConf, partitionKeys, defaultParName, hivePartition);
       return partitionPath2ReadPath(path, partitionKeys, partitionPaths, hivePartition);
@@ -387,5 +390,18 @@ public class FilePathUtils {
    */
   public static org.apache.flink.core.fs.Path toFlinkPath(Path path) {
     return new org.apache.flink.core.fs.Path(path.toUri());
+  }
+
+  /**
+   * Extracts the partition keys with given configuration.
+   *
+   * @param conf The flink configuration
+   * @return array of the partition fields
+   */
+  public static String[] extractPartitionKeys(org.apache.flink.configuration.Configuration conf) {
+    if (FlinkOptions.isDefaultValueDefined(conf, FlinkOptions.PARTITION_PATH_FIELD)) {
+      return new String[0];
+    }
+    return conf.getString(FlinkOptions.PARTITION_PATH_FIELD).split(",");
   }
 }

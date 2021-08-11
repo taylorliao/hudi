@@ -52,6 +52,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Set;
@@ -98,8 +99,6 @@ public class FSUtils {
     } catch (IOException e) {
       throw new HoodieIOException("Failed to get instance of " + FileSystem.class.getName(), e);
     }
-    LOG.info(String.format("Hadoop Configuration: fs.defaultFS: [%s], Config:[%s], FileSystem: [%s]",
-        conf.getRaw("fs.defaultFS"), conf.toString(), fs.toString()));
     return fs;
   }
 
@@ -108,6 +107,16 @@ public class FSUtils {
       return getFs(addSchemeIfLocalPath(path).toString(), conf);
     }
     return getFs(path, conf);
+  }
+
+  /**
+   * Check if table already exists in the given path.
+   * @param path base path of the table.
+   * @param fs instance of {@link FileSystem}.
+   * @return {@code true} if table exists. {@code false} otherwise.
+   */
+  public static boolean isTableExists(String path, FileSystem fs) throws IOException {
+    return fs.exists(new Path(path + "/" + HoodieTableMetaClient.METAFOLDER_NAME));
   }
 
   public static Path addSchemeIfLocalPath(String path) {
@@ -132,7 +141,7 @@ public class FSUtils {
   // TODO: this should be removed
   public static String makeDataFileName(String instantTime, String writeToken, String fileId) {
     return String.format("%s_%s_%s%s", fileId, writeToken, instantTime,
-        HoodieTableConfig.DEFAULT_BASE_FILE_FORMAT.getFileExtension());
+        HoodieTableConfig.HOODIE_BASE_FILE_FORMAT_PROP.defaultValue().getFileExtension());
   }
 
   public static String makeDataFileName(String instantTime, String writeToken, String fileId, String fileExtension) {
@@ -144,7 +153,8 @@ public class FSUtils {
   }
 
   public static String maskWithoutFileId(String instantTime, int taskPartitionId) {
-    return String.format("*_%s_%s%s", taskPartitionId, instantTime, HoodieTableConfig.DEFAULT_BASE_FILE_FORMAT.getFileExtension());
+    return String.format("*_%s_%s%s", taskPartitionId, instantTime, HoodieTableConfig.HOODIE_BASE_FILE_FORMAT_PROP
+        .defaultValue().getFileExtension());
   }
 
   public static String getCommitFromCommitFile(String commitFileName) {
@@ -261,7 +271,7 @@ public class FSUtils {
         .withAssumeDatePartitioning(assumeDatePartitioning)
         .build();
     try (HoodieTableMetadata tableMetadata = HoodieTableMetadata.create(engineContext, metadataConfig, basePathStr,
-        FileSystemViewStorageConfig.DEFAULT_VIEW_SPILLABLE_DIR)) {
+        FileSystemViewStorageConfig.FILESYSTEM_VIEW_SPILLABLE_DIR.defaultValue())) {
       return tableMetadata.getAllPartitionPaths();
     } catch (Exception e) {
       throw new HoodieException("Error fetching partition paths from metadata table", e);
@@ -271,20 +281,23 @@ public class FSUtils {
   public static List<String> getAllPartitionPaths(HoodieEngineContext engineContext, HoodieMetadataConfig metadataConfig,
                                                   String basePathStr) {
     try (HoodieTableMetadata tableMetadata = HoodieTableMetadata.create(engineContext, metadataConfig, basePathStr,
-        FileSystemViewStorageConfig.DEFAULT_VIEW_SPILLABLE_DIR)) {
+        FileSystemViewStorageConfig.FILESYSTEM_VIEW_SPILLABLE_DIR.defaultValue())) {
       return tableMetadata.getAllPartitionPaths();
     } catch (Exception e) {
       throw new HoodieException("Error fetching partition paths from metadata table", e);
     }
   }
 
-  public static FileStatus[] getFilesInPartition(HoodieEngineContext engineContext, HoodieMetadataConfig metadataConfig,
-                                                 String basePathStr, Path partitionPath) {
-    try (HoodieTableMetadata tableMetadata = HoodieTableMetadata.create(engineContext,
-        metadataConfig, basePathStr, FileSystemViewStorageConfig.DEFAULT_VIEW_SPILLABLE_DIR)) {
-      return tableMetadata.getAllFilesInPartition(partitionPath);
-    } catch (Exception e) {
-      throw new HoodieException("Error get files in partition: " + partitionPath, e);
+  public static Map<String, FileStatus[]> getFilesInPartitions(HoodieEngineContext engineContext,
+                                                               HoodieMetadataConfig metadataConfig,
+                                                               String basePathStr,
+                                                               String[] partitionPaths,
+                                                               String spillableMapPath) {
+    try (HoodieTableMetadata tableMetadata = HoodieTableMetadata.create(engineContext, metadataConfig, basePathStr,
+        spillableMapPath, true)) {
+      return tableMetadata.getAllFilesInPartitions(Arrays.asList(partitionPaths));
+    } catch (Exception ex) {
+      throw new HoodieException("Error get files in partitions: " + String.join(",", partitionPaths), ex);
     }
   }
 

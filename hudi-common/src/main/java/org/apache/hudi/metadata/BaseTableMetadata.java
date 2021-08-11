@@ -44,7 +44,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 public abstract class BaseTableMetadata implements HoodieTableMetadata {
@@ -62,6 +64,7 @@ public abstract class BaseTableMetadata implements HoodieTableMetadata {
   protected final HoodieMetadataConfig metadataConfig;
   // Directory used for Spillable Map when merging records
   protected final String spillableMapDirectory;
+  private String syncedInstantTime;
 
   protected boolean enabled;
   private TimelineMergedTableMetadata timelineMergedMetadata;
@@ -101,11 +104,7 @@ public abstract class BaseTableMetadata implements HoodieTableMetadata {
       try {
         return fetchAllPartitionPaths();
       } catch (Exception e) {
-        if (metadataConfig.enableFallback()) {
-          LOG.error("Failed to retrieve list of partition from metadata", e);
-        } else {
-          throw new HoodieMetadataException("Failed to retrieve list of partition from metadata", e);
-        }
+        throw new HoodieMetadataException("Failed to retrieve list of partition from metadata", e);
       }
     }
     return new FileSystemBackedTableMetadata(getEngineContext(), hadoopConf, datasetBasePath,
@@ -129,16 +128,32 @@ public abstract class BaseTableMetadata implements HoodieTableMetadata {
       try {
         return fetchAllFilesInPartition(partitionPath);
       } catch (Exception e) {
-        if (metadataConfig.enableFallback()) {
-          LOG.error("Failed to retrieve files in partition " + partitionPath + " from metadata", e);
-        } else {
-          throw new HoodieMetadataException("Failed to retrieve files in partition " + partitionPath + " from metadata", e);
-        }
+        throw new HoodieMetadataException("Failed to retrieve files in partition " + partitionPath + " from metadata", e);
       }
     }
 
     return new FileSystemBackedTableMetadata(getEngineContext(), hadoopConf, datasetBasePath, metadataConfig.shouldAssumeDatePartitioning())
         .getAllFilesInPartition(partitionPath);
+  }
+
+  @Override
+  public Map<String, FileStatus[]> getAllFilesInPartitions(List<String> partitionPaths)
+      throws IOException {
+    if (enabled) {
+      Map<String, FileStatus[]> partitionsFilesMap = new HashMap<>();
+
+      try {
+        for (String partitionPath : partitionPaths) {
+          partitionsFilesMap.put(partitionPath, fetchAllFilesInPartition(new Path(partitionPath)));
+        }
+        return partitionsFilesMap;
+      } catch (Exception e) {
+        throw new HoodieMetadataException("Failed to retrieve files in partition from metadata", e);
+      }
+    }
+
+    return new FileSystemBackedTableMetadata(getEngineContext(), hadoopConf, datasetBasePath, metadataConfig.shouldAssumeDatePartitioning())
+        .getAllFilesInPartitions(partitionPaths);
   }
 
   /**
@@ -285,16 +300,44 @@ public abstract class BaseTableMetadata implements HoodieTableMetadata {
 
   private void openTimelineScanner() {
     if (timelineMergedMetadata == null) {
-      List<HoodieInstant> unSyncedInstants = findInstantsToSync();
+      List<HoodieInstant> unSyncedInstants = findInstantsToSyncForReader();
       timelineMergedMetadata =
           new TimelineMergedTableMetadata(datasetMetaClient, unSyncedInstants, getSyncedInstantTime(), null);
+
+      syncedInstantTime = unSyncedInstants.isEmpty() ? getLatestDatasetInstantTime()
+          : unSyncedInstants.get(unSyncedInstants.size() - 1).getTimestamp();
     }
   }
 
-  protected abstract List<HoodieInstant> findInstantsToSync();
+  /**
+   * Return the timestamp of the latest synced instant.
+   */
+  @Override
+  public Option<String> getSyncedInstantTime() {
+    if (!enabled) {
+      return Option.empty();
+    }
 
+    return Option.ofNullable(syncedInstantTime);
+  }
+
+  /**
+   * Return the instants which are not-synced to the {@code HoodieTableMetadata}.
+   *
+   * This is the list of all completed but un-synched instants.
+   */
+  protected abstract List<HoodieInstant> findInstantsToSyncForReader();
+
+  /**
+   * Return the instants which are not-synced to the {@code HoodieTableMetadataWriter}.
+   *
+   * This is the list of all completed but un-synched instants which do not have any incomplete instants in between them.
+   */
+  protected abstract List<HoodieInstant> findInstantsToSyncForWriter();
+
+  @Override
   public boolean isInSync() {
-    return enabled && findInstantsToSync().isEmpty();
+    return enabled && findInstantsToSyncForWriter().isEmpty();
   }
 
   protected HoodieEngineContext getEngineContext() {
